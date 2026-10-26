@@ -123,6 +123,20 @@ Inside `llm-review-mode` (`*llm-review*`):
 
 ---
 
+## Configuration
+
+Customize `llm-review` options via `M-x customize-group RET llm-review`:
+
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `llm-review-save-buffer-on-delete` | `t` | Automatically save source buffer to disk after deleting a block |
+| `llm-review-inhibit-formatters-on-save` | `t` | Suppress auto-formatters (`before-save-hook`, `after-save-hook`, `apheleia`) during deletions |
+| `llm-review-confirm-delete` | `nil` | Prompt for confirmation before deleting code blocks |
+| `llm-review-highlight-source-on-visit` | `t` | Pulse/highlight target region when visited with `RET` |
+| `llm-review-directory` | `".llm-review"` | Directory name in project root for storing review JSON files |
+
+---
+
 ## Agent Skill (`emacs-review`)
 
 This repository includes a model-agnostic skill definition at `skills/emacs-review/SKILL.md` designed for AI coding agents.

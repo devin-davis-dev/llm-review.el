@@ -178,11 +178,18 @@
               (should (equal (alist-get 'title (car llm-review--findings))
                              "Unused function two"))
 
-              ;; Source buffer must no longer contain unused_func_one
+              ;; Source buffer must no longer contain unused_func_one and must be saved
               (with-current-buffer src-buf
+                (should-not (buffer-modified-p))
                 (should-not (string-match-p "unused_func_one" (buffer-string)))
                 (should (string-match-p "preserved_func" (buffer-string)))
                 (should (string-match-p "unused_func_two" (buffer-string))))
+
+              ;; File on disk must reflect deletion
+              (with-temp-buffer
+                (insert-file-contents (expand-file-name "sample.py" llm-review-test--test-dir))
+                (should-not (string-match-p "unused_func_one" (buffer-string)))
+                (should (string-match-p "preserved_func" (buffer-string))))
 
               ;; The remaining finding's line numbers must automatically adjust!
               (let ((f2 (car llm-review--findings)))
@@ -364,6 +371,32 @@
           (with-current-buffer buf
             (should (string-match-p "Newer Review Finding" (buffer-string)))
             (should-not (string-match-p "Older Review Finding" (buffer-string))))))
+    (llm-review-test--teardown)))
+
+(ert-deftest llm-review-test-inhibit-formatters-on-save ()
+  "Test that auto-formatters on `before-save-hook' are inhibited during delete."
+  (llm-review-test--setup)
+  (unwind-protect
+      (let* ((json-path (expand-file-name "findings.json" llm-review-test--test-dir))
+             (hook-called nil)
+             (test-hook (lambda () (setq hook-called t))))
+        (with-temp-file json-path
+          (insert "[{\"file\": \"sample.py\", \"start_line\": 2, \"end_line\": 4, \"title\": \"Delete Hook Test\", \"action\": \"delete\"}]"))
+        (let ((buf (llm-review-load-file json-path llm-review-test--test-dir)))
+          (with-current-buffer buf
+            (let* ((f1 (car llm-review--findings))
+                   (src-buf (alist-get 'buffer f1)))
+              (with-current-buffer src-buf
+                (add-hook 'before-save-hook test-hook nil t))
+              (goto-char (point-min))
+              (re-search-forward "Delete Hook Test")
+              (let ((llm-review-confirm-delete nil))
+                (call-interactively #'llm-review-delete))
+              ;; Verify hook was NOT called
+              (should-not hook-called)
+              ;; Verify buffer was nevertheless saved to disk
+              (with-current-buffer src-buf
+                (should-not (buffer-modified-p)))))))
     (llm-review-test--teardown)))
 
 (provide 'llm-review-test)

@@ -39,6 +39,8 @@
 (require 'pulse nil t)
 (require 'subr-x)
 
+(defvar apheleia-inhibit)
+
 ;;; Customization
 
 (defgroup llm-review nil
@@ -54,6 +56,22 @@
 
 (defcustom llm-review-confirm-delete nil
   "Whether to prompt for confirmation before deleting a code block."
+  :type 'boolean
+  :group 'llm-review)
+
+(defcustom llm-review-save-buffer-on-delete t
+  "Whether to automatically save the source buffer to disk after deleting a block.
+When non-nil, deleting a code block with `\\[llm-review-delete]' immediately saves
+the modified source buffer, ensuring deletions are persisted to disk and git."
+  :type 'boolean
+  :group 'llm-review)
+
+(defcustom llm-review-inhibit-formatters-on-save t
+  "Whether to inhibit auto-formatters when saving buffers during review actions.
+When non-nil, auto-formatters (such as `before-save-hook', `after-save-hook',
+and `apheleia') are temporarily suppressed during `\\[llm-review-delete]' saves.
+This prevents formatters from rewriting buffer layout or corrupting line
+markers, allowing the user to format buffers manually when desired."
   :type 'boolean
   :group 'llm-review)
 
@@ -747,6 +765,17 @@ If TARGET-FINDING is provided, move point to its section after rendering."
           (when (and llm-review-highlight-source-on-visit (fboundp 'pulse-momentary-highlight-region))
             (pulse-momentary-highlight-region pos end-pos 'highlight)))))))
 
+(defun llm-review--save-buffer-safely ()
+  "Save the current buffer, optionally inhibiting auto-formatters.
+Suppresses `before-save-hook', `after-save-hook', and `apheleia'
+when `llm-review-inhibit-formatters-on-save' is non-nil."
+  (if llm-review-inhibit-formatters-on-save
+      (let ((apheleia-inhibit t)
+            (before-save-hook nil)
+            (after-save-hook nil))
+        (save-buffer))
+    (save-buffer)))
+
 (defun llm-review-delete ()
   "Delete the target code block in the source buffer (`d').
 Clean up markers and refresh the UI."
@@ -793,7 +822,9 @@ Clean up markers and refresh the UI."
                    ((and (> del-beg (point-min))
                          (= (char-before del-beg) ?\n))
                     (setq del-beg (1- del-beg)))))
-                (delete-region del-beg del-end))))
+                (delete-region del-beg del-end))
+              (when (and llm-review-save-buffer-on-delete (buffer-file-name))
+                (llm-review--save-buffer-safely))))
           ;; Clean up markers
           (llm-review--cleanup-markers finding)
           ;; Compute next target finding before removal

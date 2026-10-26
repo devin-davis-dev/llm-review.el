@@ -1,0 +1,260 @@
+;;; llm-review-test.el --- Tests for llm-review.el -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026 Devin Davis
+
+;;; Commentary:
+
+;; ERT test suite for `llm-review.el'.
+
+;;; Code:
+
+(require 'ert)
+(require 'llm-review)
+
+(defconst llm-review-test--test-dir
+  (file-name-as-directory (expand-file-name "test-sandbox" default-directory))
+  "Directory used for temporary files during tests.")
+
+(defun llm-review-test--setup ()
+  "Create test directory and dummy source files."
+  (make-directory llm-review-test--test-dir t)
+  (let ((src-file (expand-file-name "sample.py" llm-review-test--test-dir)))
+    (with-temp-file src-file
+      (insert "# Line 1: Header\n"
+              "def unused_func_one():\n"      ; line 2
+              "    x = 1\n"                   ; line 3
+              "    return x\n"                ; line 4
+              "\n"                            ; line 5
+              "def preserved_func():\n"       ; line 6
+              "    return 42\n"               ; line 7
+              "\n"                            ; line 8
+              "def unused_func_two():\n"      ; line 9
+              "    pass\n"                    ; line 10
+              "\n"                            ; line 11
+              "# Line 12: Footer\n"))))
+
+(defun llm-review-test--teardown ()
+  "Clean up test artifacts and buffers."
+  (when (get-buffer llm-review-buffer-name)
+    (kill-buffer llm-review-buffer-name))
+  (dolist (buf (buffer-list))
+    (when (string-prefix-p llm-review-test--test-dir (or (buffer-file-name buf) ""))
+      (kill-buffer buf)))
+  (when (file-directory-p llm-review-test--test-dir)
+    (delete-directory llm-review-test--test-dir t)))
+
+(ert-deftest llm-review-test-load-and-markers ()
+  "Test loading findings JSON, marker creation, and insertion-type t."
+  (llm-review-test--setup)
+  (unwind-protect
+      (let* ((json-path (expand-file-name "findings.json" llm-review-test--test-dir))
+             (findings-json
+              (concat "[{"
+                      "\"file\": \"sample.py\","
+                      "\"start_line\": 2,"
+                      "\"end_line\": 4,"
+                      "\"title\": \"Unused function one\","
+                      "\"reason\": \"Function is never referenced.\","
+                      "\"action\": \"delete\""
+                      "},{"
+                      "\"file\": \"sample.py\","
+                      "\"start_line\": 9,"
+                      "\"end_line\": 10,"
+                      "\"title\": \"Unused function two\","
+                      "\"reason\": \"Stub function.\","
+                      "\"action\": \"delete\""
+                      "}]")))
+        (with-temp-file json-path
+          (insert findings-json))
+
+        (let ((buf (llm-review-load-file json-path llm-review-test--test-dir)))
+          (should (buffer-live-p buf))
+          (with-current-buffer buf
+            (should (equal (length llm-review--findings) 2))
+            (let* ((f1 (nth 0 llm-review--findings))
+                   (f2 (nth 1 llm-review--findings))
+                   (f1-s (alist-get 'start-marker f1))
+                   (f1-e (alist-get 'end-marker f1))
+                   (f2-s (alist-get 'start-marker f2))
+                   (f2-e (alist-get 'end-marker f2)))
+              ;; Verify markers are created
+              (should (markerp f1-s))
+              (should (markerp f1-e))
+              (should (markerp f2-s))
+              (should (markerp f2-e))
+
+              ;; Verify insertion type is t
+              (should (eq (marker-insertion-type f1-s) t))
+              (should (eq (marker-insertion-type f1-e) t))
+              (should (eq (marker-insertion-type f2-s) t))
+              (should (eq (marker-insertion-type f2-e) t))
+
+              ;; Verify initial line positions
+              (should (equal (llm-review--finding-current-lines f1) '(2 . 4)))
+              (should (equal (llm-review--finding-current-lines f2) '(9 . 10)))))))
+    (llm-review-test--teardown)))
+
+(ert-deftest llm-review-test-prevent-line-drift ()
+  "Verify that live markers prevent line-number drift when edits occur."
+  (llm-review-test--setup)
+  (unwind-protect
+      (let* ((json-path (expand-file-name "findings.json" llm-review-test--test-dir))
+             (findings-json
+              (concat "[{"
+                      "\"file\": \"sample.py\","
+                      "\"start_line\": 2,"
+                      "\"end_line\": 4,"
+                      "\"title\": \"Unused function one\","
+                      "\"reason\": \"Function is never referenced.\","
+                      "\"action\": \"delete\""
+                      "},{"
+                      "\"file\": \"sample.py\","
+                      "\"start_line\": 9,"
+                      "\"end_line\": 10,"
+                      "\"title\": \"Unused function two\","
+                      "\"reason\": \"Stub function.\","
+                      "\"action\": \"delete\""
+                      "}]")))
+        (with-temp-file json-path (insert findings-json))
+        (let ((buf (llm-review-load-file json-path llm-review-test--test-dir)))
+          (with-current-buffer buf
+            (let* ((f2 (nth 1 llm-review--findings))
+                   (src-buf (alist-get 'buffer f2)))
+              ;; Insert 5 new lines at the top of the source file
+              (with-current-buffer src-buf
+                (save-excursion
+                  (goto-char (point-min))
+                  (insert "# Injected line A\n# Injected line B\n# Injected line C\n")))
+
+              ;; f2 markers should have dynamically shifted down by 3 lines!
+              (should (equal (llm-review--finding-current-lines f2) '(12 . 13)))
+
+              ;; Snippet still extracts the exact target text
+              (let ((snippet (llm-review--format-snippet f2)))
+                (should (string-match-p "unused_func_two" snippet)))))))
+    (llm-review-test--teardown)))
+
+(ert-deftest llm-review-test-delete-command ()
+  "Test `d' command: deletes code block, cleans up markers, and refreshes UI."
+  (llm-review-test--setup)
+  (unwind-protect
+      (let* ((json-path (expand-file-name "findings.json" llm-review-test--test-dir))
+             (findings-json
+              (concat "[{"
+                      "\"file\": \"sample.py\","
+                      "\"start_line\": 2,"
+                      "\"end_line\": 4,"
+                      "\"title\": \"Unused function one\","
+                      "\"reason\": \"Delete me\","
+                      "\"action\": \"delete\""
+                      "},{"
+                      "\"file\": \"sample.py\","
+                      "\"start_line\": 9,"
+                      "\"end_line\": 10,"
+                      "\"title\": \"Unused function two\","
+                      "\"reason\": \"Delete me too\","
+                      "\"action\": \"delete\""
+                      "}]")))
+        (with-temp-file json-path (insert findings-json))
+        (let ((buf (llm-review-load-file json-path llm-review-test--test-dir)))
+          (with-current-buffer buf
+            ;; Move point to finding 1
+            (goto-char (point-min))
+            (re-search-forward "Unused function one")
+            (let* ((f1 (llm-review-current-finding))
+                   (s-marker (alist-get 'start-marker f1))
+                   (e-marker (alist-get 'end-marker f1))
+                   (src-buf (alist-get 'buffer f1)))
+              ;; Execute deletion
+              (let ((llm-review-confirm-delete nil))
+                (call-interactively #'llm-review-delete))
+
+              ;; Markers for finding 1 must be cleaned up (nil position)
+              (should (null (marker-position s-marker)))
+              (should (null (marker-position e-marker)))
+
+              ;; Finding 1 must be removed from the review list
+              (should (equal (length llm-review--findings) 1))
+              (should (equal (alist-get 'title (car llm-review--findings))
+                             "Unused function two"))
+
+              ;; Source buffer must no longer contain unused_func_one
+              (with-current-buffer src-buf
+                (should-not (string-match-p "unused_func_one" (buffer-string)))
+                (should (string-match-p "preserved_func" (buffer-string)))
+                (should (string-match-p "unused_func_two" (buffer-string))))
+
+              ;; The remaining finding's line numbers must automatically adjust!
+              (let ((f2 (car llm-review--findings)))
+                ;; Initially lines 9-10; after 3-line deletion, now lines 6-7
+                (should (equal (llm-review--finding-current-lines f2) '(6 . 7))))))))
+    (llm-review-test--teardown)))
+
+(ert-deftest llm-review-test-dismiss-command ()
+  "Test `x' command: dismisses finding without modifying source file."
+  (llm-review-test--setup)
+  (unwind-protect
+      (let* ((json-path (expand-file-name "findings.json" llm-review-test--test-dir))
+             (findings-json
+              (concat "[{"
+                      "\"file\": \"sample.py\","
+                      "\"start_line\": 2,"
+                      "\"end_line\": 4,"
+                      "\"title\": \"Unused function one\","
+                      "\"reason\": \"Keep it anyway\","
+                      "\"action\": \"delete\""
+                      "}]")))
+        (with-temp-file json-path (insert findings-json))
+        (let ((buf (llm-review-load-file json-path llm-review-test--test-dir)))
+          (with-current-buffer buf
+            (goto-char (point-min))
+            (re-search-forward "Unused function one")
+            (let* ((f1 (llm-review-current-finding))
+                   (s-marker (alist-get 'start-marker f1))
+                   (src-buf (alist-get 'buffer f1)))
+              (call-interactively #'llm-review-dismiss)
+
+              ;; Marker freed
+              (should (null (marker-position s-marker)))
+              ;; 0 findings remaining
+              (should (equal (length llm-review--findings) 0))
+
+              ;; Source buffer unchanged!
+              (with-current-buffer src-buf
+                (should (string-match-p "unused_func_one" (buffer-string))))))))
+    (llm-review-test--teardown)))
+
+(ert-deftest llm-review-test-section-toggle ()
+  "Test that magit-section-toggle collapses and expands preview sections."
+  (llm-review-test--setup)
+  (unwind-protect
+      (let* ((json-path (expand-file-name "findings.json" llm-review-test--test-dir))
+             (findings-json
+              (concat "[{"
+                      "\"file\": \"sample.py\","
+                      "\"start_line\": 2,"
+                      "\"end_line\": 4,"
+                      "\"title\": \"Collapsible test\","
+                      "\"reason\": \"Testing toggle\","
+                      "\"action\": \"refactor\""
+                      "}]")))
+        (with-temp-file json-path (insert findings-json))
+        (let ((buf (llm-review-load-file json-path llm-review-test--test-dir)))
+          (with-current-buffer buf
+            (goto-char (point-min))
+            (re-search-forward "Collapsible test")
+            (let ((sec (magit-current-section)))
+              (should sec)
+              ;; Initially expanded (hidden = nil)
+              (should-not (oref sec hidden))
+              ;; Press TAB to toggle
+              (call-interactively #'magit-section-toggle)
+              (should (oref sec hidden))
+              ;; Press TAB again to re-expand
+              (call-interactively #'magit-section-toggle)
+              (should-not (oref sec hidden))))))
+    (llm-review-test--teardown)))
+
+(provide 'llm-review-test)
+
+;;; llm-review-test.el ends here

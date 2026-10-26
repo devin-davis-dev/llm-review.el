@@ -53,16 +53,26 @@ Or for local development:
 
 ## Usage
 
-### 1. Ingesting Findings from CLI Tools
+### 1. Ingesting Findings from CLI Tools or Agent Skills
 
-Load any JSON file containing findings:
-```elisp
-M-x llm-review-load-file RET /path/to/findings.json RET /path/to/repo/ RET
-```
+Reviews are stored as timestamped JSON files in the project's `.llm-review/` folder (e.g., `.llm-review/review-20261026-104500.json`).
 
-Or trigger directly from a shell script or agent using `emacsclient`:
+* **Open the latest project review:**
+  ```elisp
+  M-x llm-review
+  ```
+* **Browse and select from all past reviews:**
+  ```elisp
+  M-x llm-review-browse-reviews
+  ```
+* **Load any specific JSON file directly:**
+  ```elisp
+  M-x llm-review-load-file RET .llm-review/review-20261026-104500.json RET
+  ```
+
+Or trigger directly from a shell script or coding agent using `emacsclient`:
 ```bash
-emacsclient -n -e '(llm-review-load-file "/tmp/llm-review.json" "$(pwd)/")'
+emacsclient -n -e '(llm-review "$(pwd)/")'
 ```
 
 ### 2. JSON Schema Format
@@ -104,6 +114,7 @@ Inside `llm-review-mode` (`*llm-review*`):
 | `RET` | `llm-review-visit` | Jump to source location (pulsing region) |
 | `f` | `llm-review-filter-by-action` | Filter findings by action (e.g. `delete`, `refactor`) |
 | `F` | `llm-review-clear-filter` | Clear active action filter and show all findings |
+| `b` | `llm-review-browse-reviews` | Browse and load past review runs from `.llm-review/` |
 | `n` | `llm-review-next-finding` | Move to next finding |
 | `p` | `llm-review-previous-finding` | Move to previous finding |
 | `g` | `llm-review-refresh` | Re-render UI with dynamic line numbers |
@@ -119,8 +130,9 @@ This repository includes a model-agnostic skill definition at `skills/emacs-revi
 When invoked, the agent:
 1. Analyzes code based on your prompt (e.g. searching for dead code or refactoring opportunities).
 2. Verifies exact 1-indexed line numbers enclosing complete syntactic blocks.
-3. Writes findings to `/tmp/llm-review.json`.
-4. Triggers `llm-review-load-file` in Emacs via `emacsclient`.
+3. Creates a `.llm-review/` directory in the project root if needed.
+4. Writes a fresh timestamped file (e.g. `.llm-review/review-20261026-104500.json`), preserving review history.
+5. Triggers `llm-review` in Emacs via `emacsclient`.
 
 ---
 

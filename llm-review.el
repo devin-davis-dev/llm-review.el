@@ -83,6 +83,11 @@ Prevents performance degradation on unusually large blocks."
   :type 'boolean
   :group 'llm-review)
 
+(defcustom llm-review-directory ".llm-review"
+  "Directory name (relative to project root) where review JSON files are saved."
+  :type 'string
+  :group 'llm-review)
+
 ;;; Faces
 
 (defgroup llm-review-faces nil
@@ -641,6 +646,7 @@ If TARGET-FINDING is provided, move point to its section after rendering."
               (llm-review--format-key-hint "d" "delete") "  "
               (llm-review--format-key-hint "x" "dismiss") "  "
               (llm-review--format-key-hint "f/F" "filter") "  "
+              (llm-review--format-key-hint "b" "browse") "  "
               (llm-review--format-key-hint "n/p" "nav") "  "
               (llm-review--format-key-hint "g" "refresh") "  "
               (llm-review--format-key-hint "q" "quit") "\n")
@@ -876,6 +882,7 @@ Selecting \"all\" or entering an empty string clears the filter."
     ;; Ergonomic navigation and utility bindings
     (define-key map (kbd "f")     #'llm-review-filter-by-action)
     (define-key map (kbd "F")     #'llm-review-clear-filter)
+    (define-key map (kbd "b")     #'llm-review-browse-reviews)
     (define-key map (kbd "n")     #'llm-review-next-finding)
     (define-key map (kbd "p")     #'llm-review-previous-finding)
     (define-key map (kbd "g")     #'llm-review-refresh)
@@ -927,6 +934,46 @@ insertion type `t', then presents findings in `llm-review-mode'."
       (pop-to-buffer buf)
       (message "Loaded %d review finding(s) from %s" (length processed) expanded-json)
       buf)))
+
+(defun llm-review--list-review-files (&optional repo-root)
+  "Return list of absolute paths to review JSON files in REPO-ROOT.
+Files are searched in `llm-review-directory' and sorted by
+modification time, newest first."
+  (let* ((root (file-name-as-directory (expand-file-name (or repo-root default-directory))))
+         (dir (expand-file-name llm-review-directory root)))
+    (if (file-directory-p dir)
+        (let ((files (directory-files dir t "\\.json$")))
+          (sort files
+                (lambda (a b)
+                  (time-less-p (file-attribute-modification-time (file-attributes b))
+                               (file-attribute-modification-time (file-attributes a))))))
+      nil)))
+
+;;;###autoload
+(defun llm-review (&optional repo-root)
+  "Open the latest LLM review in REPO-ROOT (defaults to `default-directory').
+Looks for review JSON files inside `llm-review-directory'."
+  (interactive)
+  (let* ((root (file-name-as-directory (expand-file-name (or repo-root default-directory))))
+         (files (llm-review--list-review-files root)))
+    (if files
+        (llm-review-load-file (car files) root)
+      (call-interactively #'llm-review-load-file))))
+
+;;;###autoload
+(defun llm-review-browse-reviews (&optional repo-root)
+  "Select and load a review JSON file in REPO-ROOT (`b').
+Files are listed from `llm-review-directory'."
+  (interactive)
+  (let* ((root (file-name-as-directory (expand-file-name (or repo-root default-directory))))
+         (dir (expand-file-name llm-review-directory root))
+         (files (llm-review--list-review-files root)))
+    (unless files
+      (user-error "No review files found in %s" dir))
+    (let* ((relative-files (mapcar (lambda (f) (file-name-nondirectory f)) files))
+           (chosen (completing-read "Select review: " relative-files nil t))
+           (full-path (expand-file-name chosen dir)))
+      (llm-review-load-file full-path root))))
 
 (provide 'llm-review)
 

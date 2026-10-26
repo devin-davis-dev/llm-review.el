@@ -337,6 +337,35 @@
               (should (string-match-p "line4" (buffer-string)))))))
     (llm-review-test--teardown)))
 
+(ert-deftest llm-review-test-project-directory-reviews ()
+  "Test automatic discovery and loading of reviews in `llm-review-directory'."
+  (llm-review-test--setup)
+  (unwind-protect
+      (let* ((review-dir (expand-file-name llm-review-directory llm-review-test--test-dir))
+             (rev1 (expand-file-name "review-20261026-100000.json" review-dir))
+             (rev2 (expand-file-name "review-20261026-110000.json" review-dir)))
+        (make-directory review-dir t)
+        ;; Write first review
+        (with-temp-file rev1
+          (insert "[{\"file\": \"sample.py\", \"start_line\": 2, \"end_line\": 4, \"title\": \"Older Review Finding\", \"action\": \"delete\"}]"))
+        ;; Ensure timestamp difference between files
+        (sleep-for 0.05)
+        ;; Write second review (newer)
+        (with-temp-file rev2
+          (insert "[{\"file\": \"sample.py\", \"start_line\": 6, \"end_line\": 7, \"title\": \"Newer Review Finding\", \"action\": \"refactor\"}]"))
+
+        ;; Verify listing sorted newest first
+        (let ((files (llm-review--list-review-files llm-review-test--test-dir)))
+          (should (equal (length files) 2))
+          (should (equal (car files) rev2)))
+
+        ;; Verify `llm-review' automatically loads the latest review
+        (let ((buf (llm-review llm-review-test--test-dir)))
+          (with-current-buffer buf
+            (should (string-match-p "Newer Review Finding" (buffer-string)))
+            (should-not (string-match-p "Older Review Finding" (buffer-string))))))
+    (llm-review-test--teardown)))
+
 (provide 'llm-review-test)
 
 ;;; llm-review-test.el ends here

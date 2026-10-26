@@ -77,6 +77,11 @@ Prevents performance degradation on unusually large blocks."
   :type 'integer
   :group 'llm-review)
 
+(defcustom llm-review-highlight-deletion-snippets t
+  "Whether to apply a subtle background tint to deletion preview snippets."
+  :type 'boolean
+  :group 'llm-review)
+
 ;;; Faces
 
 (defgroup llm-review-faces nil
@@ -84,49 +89,111 @@ Prevents performance degradation on unusually large blocks."
   :group 'llm-review
   :group 'faces)
 
+(defface llm-review-header
+  '((((class color) (background light)) :foreground "#0969da" :weight bold :height 1.1)
+    (((class color) (background dark))  :foreground "#58a6ff" :weight bold :height 1.1)
+    (t :inherit (magit-section-heading bold)))
+  "Face for review buffer header."
+  :group 'llm-review-faces)
+
 (defface llm-review-action
   '((t :weight bold))
   "Base face for finding actions."
   :group 'llm-review-faces)
 
 (defface llm-review-action-delete
-  '((((class color) (background light)) :foreground "#d70000" :inherit llm-review-action)
-    (((class color) (background dark))  :foreground "#ff6b6b" :inherit llm-review-action)
+  '((((class color) (background light))
+     :foreground "#cf222e" :background "#ffebe9" :weight bold)
+    (((class color) (background dark))
+     :foreground "#ff7b72" :background "#490202" :weight bold)
     (t :inherit (error llm-review-action)))
   "Face for `delete' actions."
   :group 'llm-review-faces)
 
 (defface llm-review-action-refactor
-  '((((class color) (background light)) :foreground "#0066cc" :inherit llm-review-action)
-    (((class color) (background dark))  :foreground "#63b2ff" :inherit llm-review-action)
+  '((((class color) (background light))
+     :foreground "#0969da" :background "#ddf4ff" :weight bold)
+    (((class color) (background dark))
+     :foreground "#58a6ff" :background "#0c2d6b" :weight bold)
     (t :inherit (font-lock-function-name-face llm-review-action)))
   "Face for `refactor' actions."
   :group 'llm-review-faces)
 
 (defface llm-review-action-fix
-  '((((class color) (background light)) :foreground "#d97706" :inherit llm-review-action)
-    (((class color) (background dark))  :foreground "#fbbf24" :inherit llm-review-action)
+  '((((class color) (background light))
+     :foreground "#9a6700" :background "#fff8c5" :weight bold)
+    (((class color) (background dark))
+     :foreground "#d29922" :background "#3d2e00" :weight bold)
     (t :inherit (warning llm-review-action)))
   "Face for `fix' actions."
   :group 'llm-review-faces)
 
+(defface llm-review-action-security
+  '((((class color) (background light))
+     :foreground "#8250df" :background "#fbefff" :weight bold)
+    (((class color) (background dark))
+     :foreground "#bc8cff" :background "#3c1e70" :weight bold)
+    (t :inherit (font-lock-type-face llm-review-action)))
+  "Face for `security' actions."
+  :group 'llm-review-faces)
+
+(defface llm-review-action-perf
+  '((((class color) (background light))
+     :foreground "#1a7f37" :background "#dafbe1" :weight bold)
+    (((class color) (background dark))
+     :foreground "#3fb950" :background "#04260f" :weight bold)
+    (t :inherit (success llm-review-action)))
+  "Face for `perf' / performance actions."
+  :group 'llm-review-faces)
+
+(defface llm-review-action-style
+  '((((class color) (background light))
+     :foreground "#0e7490" :background "#cffafe" :weight bold)
+    (((class color) (background dark))
+     :foreground "#67e8f9" :background "#083344" :weight bold)
+    (t :inherit (font-lock-keyword-face llm-review-action)))
+  "Face for `style' / lint actions."
+  :group 'llm-review-faces)
+
 (defface llm-review-action-default
-  '((t :inherit (font-lock-keyword-face llm-review-action)))
+  '((((class color) (background light))
+     :foreground "#57606a" :background "#f6f8fa" :weight bold)
+    (((class color) (background dark))
+     :foreground "#8b949e" :background "#21262d" :weight bold)
+    (t :inherit (font-lock-keyword-face llm-review-action)))
   "Face for unrecognized or default actions."
   :group 'llm-review-faces)
 
 (defface llm-review-title
-  '((t :inherit bold))
+  '((((class color) (background light)) :foreground "#1f2328" :weight bold)
+    (((class color) (background dark))  :foreground "#f0f6fc" :weight bold)
+    (t :inherit bold))
   "Face for finding titles in section headings."
+  :group 'llm-review-faces)
+
+(defface llm-review-file
+  '((((class color) (background light)) :foreground "#0969da" :weight bold)
+    (((class color) (background dark))  :foreground "#58a6ff" :weight bold)
+    (t :inherit (font-lock-string-face bold)))
+  "Face for file names in finding locations."
+  :group 'llm-review-faces)
+
+(defface llm-review-line-number-range
+  '((((class color) (background light)) :foreground "#9a6700" :weight bold)
+    (((class color) (background dark))  :foreground "#d29922" :weight bold)
+    (t :inherit font-lock-constant-face))
+  "Face for line number ranges in finding locations."
   :group 'llm-review-faces)
 
 (defface llm-review-location
   '((t :inherit shadow))
-  "Face for file and line number locations."
+  "Face for file and directory paths in metadata."
   :group 'llm-review-faces)
 
 (defface llm-review-label
-  '((t :inherit font-lock-comment-face :weight bold))
+  '((((class color) (background light)) :foreground "#57606a" :weight bold)
+    (((class color) (background dark))  :foreground "#8b949e" :weight bold)
+    (t :inherit font-lock-comment-face :weight bold))
   "Face for metadata field labels like `Reason:' or `Action:'."
   :group 'llm-review-faces)
 
@@ -135,19 +202,55 @@ Prevents performance degradation on unusually large blocks."
   "Face for finding reason descriptions."
   :group 'llm-review-faces)
 
+(defface llm-review-code-quote
+  '((((class color) (background light))
+     :background "#eff1f3" :foreground "#0969da")
+    (((class color) (background dark))
+     :background "#161b22" :foreground "#79c0ff")
+    (t :inherit font-lock-constant-face))
+  "Face for inline backtick code quotes in reasons."
+  :group 'llm-review-faces)
+
 (defface llm-review-line-number
-  '((t :inherit shadow))
+  '((((class color) (background light)) :foreground "#8c959f")
+    (((class color) (background dark))  :foreground "#6e7681")
+    (t :inherit shadow))
   "Face for line number prefixes in code previews."
   :group 'llm-review-faces)
 
+(defface llm-review-gutter
+  '((t :inherit shadow))
+  "Face for gutter separators in code snippet previews."
+  :group 'llm-review-faces)
+
 (defface llm-review-snippet-heading
-  '((t :inherit magit-section-heading))
+  '((((class color) (background light)) :foreground "#57606a" :weight bold)
+    (((class color) (background dark))  :foreground "#8b949e" :weight bold)
+    (t :inherit magit-section-heading))
   "Face for code snippet subsection headings."
   :group 'llm-review-faces)
 
-(defface llm-review-header
-  '((t :inherit magit-section-heading :weight bold))
-  "Face for review buffer header."
+(defface llm-review-snippet-delete
+  '((((class color) (background light)) :background "#fff5f5")
+    (((class color) (background dark))  :background "#2b1014")
+    (t :inherit diff-removed))
+  "Face for code preview lines scheduled for deletion."
+  :group 'llm-review-faces)
+
+(defface llm-review-key
+  '((((class color) (background light))
+     :background "#eaeef2" :foreground "#24292f" :weight bold :box (:line-width 1 :color "#d0d7de"))
+    (((class color) (background dark))
+     :background "#21262d" :foreground "#c9d1d9" :weight bold :box (:line-width 1 :color "#30363d"))
+    (t :inherit bold))
+  "Face for keyboard shortcut badges in help header."
+  :group 'llm-review-faces)
+
+(defface llm-review-divider
+  '((((class color) (background light)) :foreground "#d0d7de")
+    (((class color) (background dark))  :foreground "#30363d")
+    (t :inherit shadow))
+  "Face for visual divider rules."
   :group 'llm-review-faces)
 
 ;;; Section Classes
@@ -203,10 +306,47 @@ FINDING can be an alist or plist.  KEYS are candidate symbols or strings."
   "Return face symbol corresponding to ACTION string."
   (let ((act (downcase (or action ""))))
     (cond
-     ((string-equal act "delete") 'llm-review-action-delete)
-     ((string-equal act "refactor") 'llm-review-action-refactor)
-     ((string-equal act "fix") 'llm-review-action-fix)
+     ((member act '("delete" "remove" "dead")) 'llm-review-action-delete)
+     ((member act '("refactor" "clean" "cleanup" "simplify")) 'llm-review-action-refactor)
+     ((member act '("fix" "bug" "defect" "error")) 'llm-review-action-fix)
+     ((member act '("security" "sec" "vuln" "vulnerability")) 'llm-review-action-security)
+     ((member act '("perf" "performance" "optimize" "optimization")) 'llm-review-action-perf)
+     ((member act '("style" "lint" "convention")) 'llm-review-action-style)
      (t 'llm-review-action-default))))
+
+(defun llm-review--format-reason (text)
+  "Format reason TEXT, fontifying inline `code` fragments."
+  (if (or (null text) (string= text ""))
+      ""
+    (with-temp-buffer
+      (insert (propertize text 'face 'llm-review-reason))
+      (goto-char (point-min))
+      (while (re-search-forward "`\\([^`\n]+\\)`" nil t)
+        (let ((start (match-beginning 0))
+              (end (match-end 0)))
+          (add-text-properties start end '(face llm-review-code-quote))))
+      (buffer-string))))
+
+(defun llm-review--format-action-counts (findings)
+  "Return formatted string summarizing action counts in FINDINGS."
+  (let ((counts (make-hash-table :test 'equal)))
+    (dolist (f findings)
+      (let ((act (downcase (or (llm-review--field f 'action) "review"))))
+        (puthash act (1+ (gethash act counts 0)) counts)))
+    (let (parts)
+      (maphash
+       (lambda (act count)
+         (let ((face (llm-review--action-face act))
+               (label (format " [%d %s] " count (upcase act))))
+           (push (propertize label 'face face) parts)))
+       counts)
+      (mapconcat #'identity (nreverse parts) " "))))
+
+(defun llm-review--format-key-hint (key desc)
+  "Format KEY and DESC with badge styling."
+  (concat (propertize (format " %s " key) 'face 'llm-review-key)
+          " "
+          (propertize desc 'face 'shadow)))
 
 ;;; JSON Parsing
 
@@ -310,12 +450,14 @@ deletions occur in the source buffer.  Returns updated finding alist."
   "Format code snippet for FINDING with line numbers and syntax highlighting."
   (let* ((s-marker (alist-get 'start-marker finding))
          (e-marker (alist-get 'end-marker finding))
+         (action (downcase (or (llm-review--field finding 'action) "")))
+         (is-delete (member action '("delete" "remove" "dead")))
          (buf (and (markerp s-marker) (marker-buffer s-marker))))
     (cond
      ((not (and buf (buffer-live-p buf)))
-      "      [Source buffer not available]\n")
+      (propertize "      [Source buffer not available]\n" 'face 'shadow))
      ((not (and (marker-position s-marker) (marker-position e-marker)))
-      "      [Invalid marker position]\n")
+      (propertize "      [Invalid marker position]\n" 'face 'shadow))
      (t
       (with-current-buffer buf
         (save-restriction
@@ -323,7 +465,7 @@ deletions occur in the source buffer.  Returns updated finding alist."
           (let* ((beg (marker-position s-marker))
                  (end (marker-position e-marker)))
             (if (> beg end)
-                "      [Empty or reversed code range]\n"
+                (propertize "      [Empty or reversed code range]\n" 'face 'shadow)
               ;; Ensure syntax highlighting is active
               (font-lock-ensure beg end)
               (let* ((start-line (line-number-at-pos beg))
@@ -337,11 +479,21 @@ deletions occur in the source buffer.  Returns updated finding alist."
                     (while (and (not (eobp))
                                 (< lines-count llm-review-max-preview-lines))
                       (let* ((line (buffer-substring (point) (line-end-position)))
+                             (gutter-char (if is-delete "-" "|"))
+                             (gutter-face (if is-delete 'llm-review-action-delete 'llm-review-gutter))
                              (prefix (if llm-review-show-line-numbers
-                                         (propertize (format "      %4d | " cur-line)
-                                                     'face 'llm-review-line-number)
-                                       "      | ")))
-                        (setq out-str (concat out-str prefix line "\n"))
+                                         (concat (propertize (format "      %4d " cur-line)
+                                                             'face 'llm-review-line-number)
+                                                 (propertize (format "%s " gutter-char)
+                                                             'face gutter-face))
+                                       (concat "      "
+                                               (propertize (format "%s " gutter-char)
+                                                           'face gutter-face))))
+                             (line-full (concat prefix line "\n")))
+                        (when (and is-delete llm-review-highlight-deletion-snippets)
+                          (add-face-text-property 0 (length line-full)
+                                                  'llm-review-snippet-delete t line-full))
+                        (setq out-str (concat out-str line-full))
                         (setq cur-line (1+ cur-line))
                         (setq lines-count (1+ lines-count))
                         (forward-line 1)))
@@ -406,19 +558,30 @@ If TARGET-FINDING is provided, move point to its section after rendering."
     ;; Root section wrapper enables collapsible subsections in magit-section
     (magit-insert-section (magit-section)
       ;; Buffer header
-      (insert (propertize "LLM Code Review\n" 'face 'llm-review-header))
-      (insert (propertize (format "Source:   %s\n" (or source-file "in-memory"))
-                          'face 'llm-review-location))
-      (insert (propertize (format "Root:     %s\n" (or repo-root default-directory))
-                          'face 'llm-review-location))
-      (insert (propertize (format "Findings: %d remaining\n" (length findings))
-                          'face 'llm-review-location))
-      (insert (propertize "Keys:     [TAB] toggle preview | [RET] visit | [d] delete | [x] dismiss | [n/p] nav | [g] refresh | [q] quit\n\n"
-                          'face 'font-lock-comment-face))
+      (insert (propertize "  LLM Code Review\n" 'face 'llm-review-header))
+      (insert (propertize (concat "  " (make-string 72 ?─) "\n") 'face 'llm-review-divider))
+      (insert "  " (propertize "Source:   " 'face 'llm-review-label)
+              (propertize (or source-file "in-memory") 'face 'llm-review-location) "\n")
+      (insert "  " (propertize "Root:     " 'face 'llm-review-label)
+              (propertize (or repo-root default-directory) 'face 'llm-review-location) "\n")
+      (insert "  " (propertize "Findings: " 'face 'llm-review-label)
+              (propertize (format "%d remaining" (length findings)) 'face 'bold))
+      (when findings
+        (insert "   " (llm-review--format-action-counts findings)))
+      (insert "\n")
+      (insert "  " (propertize "Quickref: " 'face 'llm-review-label)
+              (llm-review--format-key-hint "TAB" "preview") "  "
+              (llm-review--format-key-hint "RET" "visit") "  "
+              (llm-review--format-key-hint "d" "delete") "  "
+              (llm-review--format-key-hint "x" "dismiss") "  "
+              (llm-review--format-key-hint "n/p" "nav") "  "
+              (llm-review--format-key-hint "g" "refresh") "  "
+              (llm-review--format-key-hint "q" "quit") "\n")
+      (insert (propertize (concat "  " (make-string 72 ?─) "\n\n") 'face 'llm-review-divider))
 
       (if (null findings)
           (insert (propertize "  ✓ All findings resolved! (0 remaining)\n\n"
-                              'face 'success))
+                              'face '(:inherit (success bold))))
         ;; Insert each finding as a collapsible section
         (dolist (finding findings)
           (let* ((title (or (llm-review--field finding 'title) "Untitled Finding"))
@@ -430,21 +593,24 @@ If TARGET-FINDING is provided, move point to its section after rendering."
                  (line-pair (llm-review--finding-current-lines finding))
                  (start-ln (car line-pair))
                  (end-ln (cdr line-pair))
-                 (action-str (format "[%s]" (downcase action)))
+                 (action-str (format " %-10s " (upcase (or action "REVIEW"))))
                  (act-face (llm-review--action-face action)))
             (magit-insert-section (llm-review-finding-section finding nil)
-              ;; Heading: [action] Title (file:start-end)
+              ;; Heading: [ACTION] Title  rel-file:start-end
               (magit-insert-heading
-                (propertize (format "%-10s " action-str) 'face act-face)
-                (propertize (format "%s " title) 'face 'llm-review-title)
-                (propertize (format "(%s:%d-%d)" rel-file start-ln end-ln)
-                            'face 'llm-review-location))
+                (propertize action-str 'face act-face)
+                " "
+                (propertize title 'face 'llm-review-title)
+                "  "
+                (propertize rel-file 'face 'llm-review-file)
+                (propertize ":" 'face 'shadow)
+                (propertize (format "%d-%d" start-ln end-ln) 'face 'llm-review-line-number-range))
               ;; Metadata body
               (when reason
                 (insert "    " (propertize "Reason: " 'face 'llm-review-label)
-                        (propertize reason 'face 'llm-review-reason) "\n"))
+                        (llm-review--format-reason reason) "\n"))
               (insert "    " (propertize "Action: " 'face 'llm-review-label)
-                      (propertize action 'face act-face) "\n")
+                      (propertize (downcase action) 'face act-face) "\n")
               ;; Collapsible Code Snippet subsection
               (magit-insert-section (llm-review-snippet-section finding llm-review-collapse-snippets-by-default)
                 (magit-insert-heading

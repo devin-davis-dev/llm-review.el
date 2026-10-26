@@ -28,7 +28,7 @@ When coding assistants (like Google Antigravity, Claude, ChatGPT, etc.) or exter
 In your `packages.el`:
 ```elisp
 (package! llm-review
-  :recipe (:host github :repo "devindavis/llm-review.el"))
+  :recipe (:host github :repo "devin-davis-dev/llm-review.el""))
 ```
 Or for local development:
 ```elisp
@@ -39,7 +39,7 @@ Or for local development:
 ### Straight.el
 ```elisp
 (straight-use-package
- '(llm-review :type git :host github :repo "devindavis/llm-review.el"))
+ '(llm-review :type git :host github :repo "devin-davis-dev/llm-review.el"))
 ```
 
 ### Manual / `use-package`

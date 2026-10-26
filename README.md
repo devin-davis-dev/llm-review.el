@@ -1,6 +1,6 @@
 # llm-review.el
 
-A production-ready Emacs package providing a Magit-style interactive code review UI for LLM-generated code analysis findings.
+A Emacs package providing a Magit-style interactive code review UI for LLM-generated code analysis findings.
 
 ---
 

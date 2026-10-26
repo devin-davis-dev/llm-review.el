@@ -1,6 +1,17 @@
 # llm-review.el
 
-A Emacs package providing a Magit-style interactive code review UI for LLM-generated code analysis findings.
+An Emacs package providing a Magit-style interactive code review UI for LLM-generated code analysis findings.
+
+---
+
+## Design Philosophy: AI Proposes, Human Disposes
+
+Autonomous code deletion and blind multi-file refactoring by AI coding assistants frequently introduce silent regressions, break dynamic reflection/dispatch, or eliminate intentionally preserved interfaces. 
+
+`llm-review.el` is built on an unapologetic **Human-in-the-Loop (HITL)** architecture:
+- **The AI is an analytical scout**: It combs through your repository, traces symbol references, assesses risk, and flags candidate findings.
+- **The Human is the pilot and sole authority**: You rapidly triage proposals inside Emacs with single-key ergonomics (<kbd>TAB</kbd>, <kbd>RET</kbd>, <kbd>d</kbd>, <kbd>x</kbd>). You verify context, approve deletions, or dismiss false-positives with zero friction.
+- **No autonomous modification**: AI agents using the `emacs-review` skill are strictly prohibited from directly editing source code—every change is authorized by you in Emacs.
 
 ---
 
@@ -87,7 +98,10 @@ The input JSON should be an array of objects matching the following schema:
     "end_line": 56,
     "title": "Unused helper function `calc_score`",
     "reason": "Superseded by `score_v2`; no longer referenced anywhere in the repository.",
-    "action": "delete"
+    "action": "delete",
+    "risk": "low",
+    "confidence": "high",
+    "verification_note": "Verify external plugins do not call this helper dynamically."
   },
   {
     "file": "src/auth.py",
@@ -95,7 +109,10 @@ The input JSON should be an array of objects matching the following schema:
     "end_line": 118,
     "title": "Redundant token validation block",
     "reason": "Token is already validated in the outer middleware.",
-    "action": "refactor"
+    "action": "refactor",
+    "risk": "medium",
+    "confidence": "high",
+    "verification_note": "Check that sub-methods do not rely on local token mutation."
   }
 ]
 ```
@@ -113,7 +130,8 @@ Inside `llm-review-mode` (`*llm-review*`):
 | `x` | `llm-review-dismiss` | Dismiss finding without touching source file |
 | `RET` | `llm-review-visit` | Jump to source location (pulsing region) |
 | `f` | `llm-review-filter-by-action` | Filter findings by action (e.g. `delete`, `refactor`) |
-| `F` | `llm-review-clear-filter` | Clear active action filter and show all findings |
+| `r` | `llm-review-filter-by-risk` | Filter findings by risk level (`low`, `medium`, `high`) |
+| `F` | `llm-review-clear-filter` | Clear active action & risk filters and show all findings |
 | `b` | `llm-review-browse-reviews` | Browse and load past review runs from `.llm-review/` |
 | `n` | `llm-review-next-finding` | Move to next finding |
 | `p` | `llm-review-previous-finding` | Move to previous finding |

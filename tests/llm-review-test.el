@@ -399,6 +399,73 @@
                 (should-not (buffer-modified-p)))))))
     (llm-review-test--teardown)))
 
+(ert-deftest llm-review-test-hitl-metadata-and-risk-filtering ()
+  "Test rendering of risk, confidence, verification notes, and risk filtering."
+  (llm-review-test--setup)
+  (unwind-protect
+      (let* ((json-path (expand-file-name "findings.json" llm-review-test--test-dir))
+             (findings-json
+              (concat "[{"
+                      "\"file\": \"sample.py\","
+                      "\"start_line\": 2,"
+                      "\"end_line\": 4,"
+                      "\"title\": \"High risk deletion\","
+                      "\"reason\": \"Potentially dead helper.\","
+                      "\"action\": \"delete\","
+                      "\"risk\": \"high\","
+                      "\"confidence\": \"high\","
+                      "\"verification_note\": \"Check dynamic callers in dispatch.py\""
+                      "},{"
+                      "\"file\": \"sample.py\","
+                      "\"start_line\": 6,"
+                      "\"end_line\": 7,"
+                      "\"title\": \"Low risk cleanup\","
+                      "\"reason\": \"Safe refactoring.\","
+                      "\"action\": \"refactor\","
+                      "\"risk\": \"low\","
+                      "\"confidence\": \"medium\""
+                      "}]")))
+        (with-temp-file json-path (insert findings-json))
+        (let ((buf (llm-review-load-file json-path llm-review-test--test-dir)))
+          (with-current-buffer buf
+            ;; Check that risk & confidence badges and verification note are rendered
+            (should (string-match-p "RISK: HIGH" (buffer-string)))
+            (should (string-match-p "CONF: HIGH" (buffer-string)))
+            (should (string-match-p "Human Verification Check:" (buffer-string)))
+            (should (string-match-p "Check dynamic callers in dispatch.py" (buffer-string)))
+            (should (string-match-p "RISK: LOW" (buffer-string)))
+
+            ;; Filter by risk: high
+            (llm-review-filter-by-risk "high")
+            (should (equal (length (llm-review--visible-findings)) 1))
+            (should (string-match-p "High risk deletion" (buffer-string)))
+            (should-not (string-match-p "Low risk cleanup" (buffer-string)))
+
+            ;; Filter by risk: low
+            (llm-review-filter-by-risk "low")
+            (should (equal (length (llm-review--visible-findings)) 1))
+            (should-not (string-match-p "High risk deletion" (buffer-string)))
+            (should (string-match-p "Low risk cleanup" (buffer-string)))
+
+            ;; Clear filters
+            (llm-review-clear-filter)
+            (should (equal (length (llm-review--visible-findings)) 2))
+
+            ;; Delete first finding and verify reviewed counter
+            (goto-char (point-min))
+            (re-search-forward "High risk deletion")
+            (let ((llm-review-confirm-delete nil))
+              (call-interactively #'llm-review-delete))
+            (should (string-match-p "reviewed 1: 1 deleted" (buffer-string)))
+
+            ;; Dismiss second finding and verify reviewed counter
+            (goto-char (point-min))
+            (re-search-forward "Low risk cleanup")
+            (call-interactively #'llm-review-dismiss)
+            (should (equal (length llm-review--findings) 0))
+            (should (string-match-p "All findings resolved" (buffer-string))))))
+    (llm-review-test--teardown)))
+
 (provide 'llm-review-test)
 
 ;;; llm-review-test.el ends here

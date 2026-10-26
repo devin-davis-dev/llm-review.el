@@ -7,6 +7,13 @@ description: Analyze the codebase for improvements, dead code, bugs, or refactor
 
 This skill inspects your codebase according to your review prompt or target files, extracts actionable code quality findings, and transmits them directly into an interactive Magit-style review buffer in GNU Emacs powered by `llm-review.el`.
 
+> [!IMPORTANT]
+> **Core Philosophy: AI Proposes, Human Disposes.**
+> Autonomous code deletion and blind refactoring are fundamentally unsafe for non-trivial codebases. This skill operates under an uncompromising **Human-in-the-Loop (HITL)** architecture: the AI agent functions exclusively as an analytical scout, while the human developer retains sole authority, decision-making, and code ownership.
+>
+> **Strict Agent Boundary:**
+> When invoked via `/emacs-review`, the AI agent is **strictly prohibited from directly editing, refactoring, or deleting any project files**. The agent's work concludes once structured findings are ingested into Emacs. Every code modification must be explicitly authorized by the human developer.
+
 Within Emacs, each finding is rendered as a collapsible section with live buffer markers, letting you preview, navigate, dismiss (`x`), visit (`RET`), or cleanly delete the target code block (`d`) without line drift.
 
 ---
@@ -16,7 +23,7 @@ Within Emacs, each finding is rendered as a collapsible section with live buffer
 Invoke this skill whenever you want to:
 - Review code quality, unused functions, or dead imports across the repository.
 - Perform targeted refactoring or cleanup on specific files or git diffs.
-- Inspect and delete deprecated APIs or legacy blocks interactively inside Emacs.
+- Inspect and delete deprecated APIs or legacy blocks interactively inside Emacs with human verification.
 
 ---
 
@@ -37,6 +44,13 @@ Invoke this skill whenever you want to:
    > - Line ranges (`start_line` to `end_line`) MUST enclose **complete syntactic blocks** (e.g., the entire function including decorators/docstrings, complete class definitions, whole conditional branches, or complete import statements).
    > - This is critical because pressing `d` in `llm-review` deletes the entire designated block. If line bounds cut across expressions or leave orphaned braces/indentation, the source file will be broken.
 
+3. **Mandatory Counter-Evidence & Risk Assessment:**
+   Before recommending an action (especially `"delete"`), actively search for reasons **not** to remove the block:
+   - Check dynamic dispatch, string lookups, reflection, or `getattr` calls.
+   - Check if the symbol is an interface implementation, hook, or exported public API.
+   - Assign an honest `risk` (`"low"`, `"medium"`, `"high"`) and `confidence` (`"high"`, `"medium"`, `"low"`).
+   - In `verification_note`, supply a crisp check for the human engineer (e.g. *"Verify whether `render_token` is called dynamically in serializers.py"*).
+
 ### Step 2: Create Project `.llm-review/` Directory & Write Fresh Review File
 
 1. Ensure the `.llm-review/` directory exists inside the project directory:
@@ -53,13 +67,16 @@ Invoke this skill whenever you want to:
 
 3. Structure your analysis as a JSON array of objects matching the schema below and write it to the new file.
 
-Each finding object must include the following keys:
+Each finding object should include the following keys:
 - `file`: Path to the file (relative to repository root or absolute).
 - `start_line`: 1-indexed starting line number (integer).
 - `end_line`: 1-indexed ending line number (integer, inclusive).
 - `title`: Concise title summarizing the finding.
 - `reason`: Explanation of why this code should be removed, refactored, or fixed.
-- `action`: Recommended action string (e.g., `"delete"`, `"refactor"`, `"fix"`, `"perf"`, `"security"`, `"style"`, or `"review"`).
+- `action`: Recommended action string (`"delete"`, `"refactor"`, `"fix"`, `"perf"`, `"security"`, `"style"`, or `"review"`).
+- `risk`: Architectural risk rating (`"low"`, `"medium"`, or `"high"`).
+- `confidence`: Confidence rating in the static analysis (`"high"`, `"medium"`, or `"low"`).
+- `verification_note`: (Optional but strongly recommended) Specific instructions on what the human should double-check before approving.
 
 #### JSON Schema Example:
 ```json
@@ -69,8 +86,11 @@ Each finding object must include the following keys:
     "start_line": 42,
     "end_line": 56,
     "title": "Unused legacy helper `sample_old_calc`",
-    "reason": "Superseded by `sample_calc_v2`; not referenced anywhere in the repository.",
-    "action": "delete"
+    "reason": "Superseded by `sample_calc_v2`; no static call sites found in repository.",
+    "action": "delete",
+    "risk": "low",
+    "confidence": "high",
+    "verification_note": "Verify that external plugins do not import this helper directly."
   },
   {
     "file": "src/sample.py",
@@ -78,7 +98,10 @@ Each finding object must include the following keys:
     "end_line": 95,
     "title": "Redundant nil-check guard",
     "reason": "`when-let` already handles nil values; inner check is redundant.",
-    "action": "refactor"
+    "action": "refactor",
+    "risk": "low",
+    "confidence": "high",
+    "verification_note": "Check that sub-expressions do not rely on side-effects of inner check."
   }
 ]
 ```
@@ -103,11 +126,14 @@ emacsclient -n -e "(progn (require 'llm-review) (llm-review \"$(pwd)/\"))"
   emacsclient -n -e "(progn (load \"$(pwd)/llm-review.el\") (llm-review \"$(pwd)/\"))"
   ```
 
+### Step 4: Present Review to User
+
+Report findings to the user with a respectful, assistive posture. **Never state "I have deleted or cleaned up your code."** Instead, state:
+> *"I have prepared X actionable proposals for your review in Emacs buffer `*llm-review*`. You have full control to inspect (`RET`), toggle preview (`TAB`), approve deletion (`d`), or dismiss (`x`)."*
+
 ---
 
 ## Emacs Review Keybindings Reference
-
-Inform the user that findings are ready in their `*llm-review*` Emacs buffer with the following keybindings:
 
 | Key | Command | Description |
 | :--- | :--- | :--- |
@@ -116,6 +142,7 @@ Inform the user that findings are ready in their `*llm-review*` Emacs buffer wit
 | `x` | `llm-review-dismiss` | Dismiss finding without touching source file |
 | `RET` | `llm-review-visit` | Jump directly to target location in source buffer |
 | `f` | `llm-review-filter-by-action` | Filter findings by action (e.g. `delete`, `refactor`) |
+| `r` | `llm-review-filter-by-risk` | Filter findings by risk level (`low`, `medium`, `high`) |
 | `F` | `llm-review-clear-filter` | Clear active filter and display all findings |
 | `b` | `llm-review-browse-reviews` | Select and load any past review session from `.llm-review/` |
 | `n` / `p` | `llm-review-next/prev` | Navigate to next / previous finding heading |

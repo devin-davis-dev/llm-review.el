@@ -277,6 +277,72 @@ Prevents performance degradation on unusually large blocks."
   "Face for visual divider rules."
   :group 'llm-review-faces)
 
+(defface llm-review-risk-high
+  '((((class color) (background light))
+     :foreground "#cf222e" :background "#ffebe9" :weight bold)
+    (((class color) (background dark))
+     :foreground "#ff7b72" :background "#490202" :weight bold)
+    (t :inherit error))
+  "Face for high-risk finding badges."
+  :group 'llm-review-faces)
+
+(defface llm-review-risk-medium
+  '((((class color) (background light))
+     :foreground "#9a6700" :background "#fff8c5" :weight bold)
+    (((class color) (background dark))
+     :foreground "#d29922" :background "#3d2e00" :weight bold)
+    (t :inherit warning))
+  "Face for medium-risk finding badges."
+  :group 'llm-review-faces)
+
+(defface llm-review-risk-low
+  '((((class color) (background light))
+     :foreground "#1a7f37" :background "#dafbe1" :weight bold)
+    (((class color) (background dark))
+     :foreground "#3fb950" :background "#04260f" :weight bold)
+    (t :inherit success))
+  "Face for low-risk finding badges."
+  :group 'llm-review-faces)
+
+(defface llm-review-confidence-high
+  '((((class color) (background light)) :foreground "#0969da" :weight bold)
+    (((class color) (background dark))  :foreground "#58a6ff" :weight bold)
+    (t :inherit font-lock-keyword-face))
+  "Face for high-confidence indicator."
+  :group 'llm-review-faces)
+
+(defface llm-review-confidence-medium
+  '((((class color) (background light)) :foreground "#57606a" :weight bold)
+    (((class color) (background dark))  :foreground "#8b949e" :weight bold)
+    (t :inherit shadow))
+  "Face for medium-confidence indicator."
+  :group 'llm-review-faces)
+
+(defface llm-review-confidence-low
+  '((((class color) (background light)) :foreground "#cf222e" :weight bold)
+    (((class color) (background dark))  :foreground "#ff7b72" :weight bold)
+    (t :inherit error))
+  "Face for low-confidence indicator."
+  :group 'llm-review-faces)
+
+(defface llm-review-verification-label
+  '((((class color) (background light))
+     :foreground "#7d4e00" :weight bold)
+    (((class color) (background dark))
+     :foreground "#e3b341" :weight bold)
+    (t :inherit warning :weight bold))
+  "Face for human verification callout label."
+  :group 'llm-review-faces)
+
+(defface llm-review-verification-note
+  '((((class color) (background light))
+     :foreground "#663900" :slant italic)
+    (((class color) (background dark))
+     :foreground "#f0883e" :slant italic)
+    (t :inherit font-lock-doc-face))
+  "Face for human verification instructions."
+  :group 'llm-review-faces)
+
 ;;; Section Classes
 
 (defclass llm-review-finding-section (magit-section) ()
@@ -292,6 +358,15 @@ Prevents performance degradation on unusually large blocks."
 
 (defvar-local llm-review--action-filter nil
   "Current action filter string (e.g. \"delete\"), or nil for all findings.")
+
+(defvar-local llm-review--risk-filter nil
+  "Current risk filter string (e.g. \"high\"), or nil for all findings.")
+
+(defvar-local llm-review--deleted-count 0
+  "Number of findings deleted in the current review session.")
+
+(defvar-local llm-review--dismissed-count 0
+  "Number of findings dismissed in the current review session.")
 
 (defvar-local llm-review--repo-root nil
   "Repository root directory associated with the current review buffer.")
@@ -311,16 +386,27 @@ Prevents performance degradation on unusually large blocks."
     (sort actions #'string-lessp)))
 
 (defun llm-review--visible-findings ()
-  "Return list of findings matching `llm-review--action-filter'."
-  (if (or (null llm-review--action-filter)
-          (string= llm-review--action-filter "")
-          (string-equal (downcase llm-review--action-filter) "all"))
-      llm-review--findings
-    (cl-remove-if-not
-     (lambda (f)
-       (string-equal (downcase (or (llm-review--field f 'action) "review"))
-                     (downcase llm-review--action-filter)))
-     llm-review--findings)))
+  "Return list of findings matching active action and risk filters."
+  (let ((findings llm-review--findings))
+    (when (and llm-review--action-filter
+               (not (string= llm-review--action-filter ""))
+               (not (string-equal (downcase llm-review--action-filter) "all")))
+      (setq findings
+            (cl-remove-if-not
+             (lambda (f)
+               (string-equal (downcase (or (llm-review--field f 'action) "review"))
+                             (downcase llm-review--action-filter)))
+             findings)))
+    (when (and llm-review--risk-filter
+               (not (string= llm-review--risk-filter ""))
+               (not (string-equal (downcase llm-review--risk-filter) "all")))
+      (setq findings
+            (cl-remove-if-not
+             (lambda (f)
+               (string-equal (downcase (or (llm-review--field f 'risk) "unspecified"))
+                             (downcase llm-review--risk-filter)))
+             findings)))
+    findings))
 
 (defun llm-review--field (finding &rest keys)
   "Retrieve value for any of KEYS from FINDING.
@@ -361,6 +447,24 @@ FINDING can be an alist or plist.  KEYS are candidate symbols or strings."
      ((member act '("perf" "performance" "optimize" "optimization")) 'llm-review-action-perf)
      ((member act '("style" "lint" "convention")) 'llm-review-action-style)
      (t 'llm-review-action-default))))
+
+(defun llm-review--risk-face (risk)
+  "Return face symbol corresponding to RISK string."
+  (let ((r (downcase (or risk ""))))
+    (cond
+     ((string-equal r "high") 'llm-review-risk-high)
+     ((string-equal r "medium") 'llm-review-risk-medium)
+     ((string-equal r "low") 'llm-review-risk-low)
+     (t 'llm-review-risk-low))))
+
+(defun llm-review--confidence-face (confidence)
+  "Return face symbol corresponding to CONFIDENCE string."
+  (let ((c (downcase (or confidence ""))))
+    (cond
+     ((string-equal c "high") 'llm-review-confidence-high)
+     ((string-equal c "medium") 'llm-review-confidence-medium)
+     ((string-equal c "low") 'llm-review-confidence-low)
+     (t 'llm-review-confidence-medium))))
 
 (defun llm-review--propertize (string face &rest extra-props)
   "Return STRING propertized with FACE for both `face' and `font-lock-face'.
@@ -644,26 +748,43 @@ If TARGET-FINDING is provided, move point to its section after rendering."
       (insert "  " (llm-review--propertize "Root:     " 'llm-review-label)
               (llm-review--propertize (or repo-root default-directory) 'llm-review-location) "\n")
       (insert "  " (llm-review--propertize "Findings: " 'llm-review-label))
-      (if filter
-          (insert (llm-review--propertize (format "%d visible (of %d total)"
-                                                  (length visible-findings)
-                                                  (length all-findings))
-                                          'bold)
-                  "   "
-                  (llm-review--propertize (format " [FILTER: %s] " (upcase filter))
-                                          (llm-review--action-face filter))
-                  " "
-                  (llm-review--propertize "(press 'F' to clear)" 'shadow))
-        (insert (llm-review--propertize (format "%d remaining" (length all-findings)) 'bold))
-        (when all-findings
-          (insert "   " (llm-review--format-action-counts all-findings))))
+      (let* ((reviewed (+ llm-review--deleted-count llm-review--dismissed-count))
+             (has-filters (or filter llm-review--risk-filter)))
+        (if has-filters
+            (progn
+              (insert (llm-review--propertize (format "%d visible (of %d remaining)"
+                                                      (length visible-findings)
+                                                      (length all-findings))
+                                              'bold))
+              (when filter
+                (insert "   "
+                        (llm-review--propertize (format " [FILTER: %s] " (upcase filter))
+                                                (llm-review--action-face filter))))
+              (when llm-review--risk-filter
+                (insert "   "
+                        (llm-review--propertize (format " [RISK: %s] " (upcase llm-review--risk-filter))
+                                                (llm-review--risk-face llm-review--risk-filter))))
+              (insert " " (llm-review--propertize "(press 'F' to clear filters)" 'shadow)))
+          (if (> reviewed 0)
+              (insert (llm-review--propertize
+                       (format "%d remaining (reviewed %d: %d deleted, %d dismissed)"
+                               (length all-findings)
+                               reviewed
+                               llm-review--deleted-count
+                               llm-review--dismissed-count)
+                       'bold))
+            (insert (llm-review--propertize (format "%d remaining" (length all-findings)) 'bold)))
+          (when all-findings
+            (insert "   " (llm-review--format-action-counts all-findings)))))
       (insert "\n")
       (insert "  " (llm-review--propertize "Quickref: " 'llm-review-label)
               (llm-review--format-key-hint "TAB" "preview") "  "
               (llm-review--format-key-hint "RET" "visit") "  "
               (llm-review--format-key-hint "d" "delete") "  "
               (llm-review--format-key-hint "x" "dismiss") "  "
-              (llm-review--format-key-hint "f/F" "filter") "  "
+              (llm-review--format-key-hint "f" "action") "  "
+              (llm-review--format-key-hint "r" "risk") "  "
+              (llm-review--format-key-hint "F" "clear") "  "
               (llm-review--format-key-hint "b" "browse") "  "
               (llm-review--format-key-hint "n/p" "nav") "  "
               (llm-review--format-key-hint "g" "refresh") "  "
@@ -675,8 +796,7 @@ If TARGET-FINDING is provided, move point to its section after rendering."
         (insert (llm-review--propertize "  ✓ All findings resolved! (0 remaining)\n\n"
                                         '(:inherit (success bold)))))
        ((null visible-findings)
-        (insert (llm-review--propertize (format "  ✓ No findings matching filter [%s]! (%d other findings remaining, press 'F' to reset filter)\n\n"
-                                                (upcase (or filter "UNKNOWN"))
+        (insert (llm-review--propertize (format "  ✓ No findings matching active filters! (%d other findings remaining, press 'F' to reset filter)\n\n"
                                                 (length all-findings))
                                         '(:inherit (warning bold)))))
        (t
@@ -685,18 +805,29 @@ If TARGET-FINDING is provided, move point to its section after rendering."
           (let* ((title (or (llm-review--field finding 'title) "Untitled Finding"))
                  (action (or (llm-review--field finding 'action) "review"))
                  (reason (llm-review--field finding 'reason))
+                 (risk (llm-review--field finding 'risk))
+                 (confidence (llm-review--field finding 'confidence))
+                 (verification-note (llm-review--field finding 'verification_note 'verification-note 'caveat 'human_check))
                  (rel-file (or (alist-get 'rel-file finding)
                                (llm-review--field finding 'file)
                                "unknown"))
                  (line-pair (llm-review--finding-current-lines finding))
                  (start-ln (car line-pair))
                  (end-ln (cdr line-pair))
-                 (action-str (format " %-10s " (upcase (or action "REVIEW"))))
+                 (action-str (format " %-8s " (upcase (or action "REVIEW"))))
                  (act-face (llm-review--action-face action)))
             (magit-insert-section (llm-review-finding-section finding nil)
-              ;; Heading: [ACTION] Title  rel-file:start-end
+              ;; Heading: [ACTION] [RISK: ...] [CONF: ...] Title  rel-file:start-end
               (magit-insert-heading
                 (llm-review--propertize action-str act-face)
+                (if risk
+                    (concat " " (llm-review--propertize (format " RISK: %s " (upcase risk))
+                                                        (llm-review--risk-face risk)))
+                  "")
+                (if confidence
+                    (concat " " (llm-review--propertize (format " CONF: %s " (upcase confidence))
+                                                        (llm-review--confidence-face confidence)))
+                  "")
                 " "
                 (llm-review--propertize title 'llm-review-title)
                 "  "
@@ -704,9 +835,24 @@ If TARGET-FINDING is provided, move point to its section after rendering."
                 (llm-review--propertize ":" 'shadow)
                 (llm-review--propertize (format "%d-%d" start-ln end-ln) 'llm-review-line-number-range))
               ;; Metadata body
+              (when (or risk confidence)
+                (insert "    ")
+                (when risk
+                  (insert (llm-review--propertize "Risk: " 'llm-review-label)
+                          (llm-review--propertize (format " [%s] " (upcase risk))
+                                                  (llm-review--risk-face risk))
+                          "   "))
+                (when confidence
+                  (insert (llm-review--propertize "Confidence: " 'llm-review-label)
+                          (llm-review--propertize (format " [%s] " (upcase confidence))
+                                                  (llm-review--confidence-face confidence))))
+                (insert "\n"))
               (when reason
                 (insert "    " (llm-review--propertize "Reason: " 'llm-review-label)
                         (llm-review--format-reason reason) "\n"))
+              (when verification-note
+                (insert "    " (llm-review--propertize "Human Verification Check: " 'llm-review-verification-label)
+                        (llm-review--propertize verification-note 'llm-review-verification-note) "\n"))
               (insert "    " (llm-review--propertize "Action: " 'llm-review-label)
                       (llm-review--propertize (downcase action) act-face) "\n")
               ;; Collapsible Code Snippet subsection
@@ -833,6 +979,7 @@ Clean up markers and refresh the UI."
                  (new-visible (delq finding (copy-sequence cur-visible)))
                  (next-target (and new-visible
                                    (nth (min (or v-idx 0) (1- (length new-visible))) new-visible))))
+            (cl-incf llm-review--deleted-count)
             (setq llm-review--findings (delq finding llm-review--findings))
             (llm-review--render-buffer next-target)
             (message "Deleted code block: %s" title)))))))
@@ -850,6 +997,7 @@ Clean up markers and refresh the UI."
              (new-visible (delq finding (copy-sequence cur-visible)))
              (next-target (and new-visible
                                (nth (min (or v-idx 0) (1- (length new-visible))) new-visible))))
+        (cl-incf llm-review--dismissed-count)
         (setq llm-review--findings (delq finding llm-review--findings))
         (llm-review--render-buffer next-target)
         (message "Dismissed: %s" title)))))
@@ -861,13 +1009,16 @@ Clean up markers and refresh the UI."
             (yes-or-no-p (format "Clear all %d findings? " (length llm-review--findings))))
     (llm-review--cleanup-all-markers)
     (setq llm-review--action-filter nil)
+    (setq llm-review--risk-filter nil)
+    (setq llm-review--deleted-count 0)
+    (setq llm-review--dismissed-count 0)
     (llm-review--render-buffer)
     (message "All LLM review findings cleared.")))
 
 (defun llm-review-filter-by-action (&optional action)
   "Filter visible findings by ACTION.
 If called interactively, prompt for an action using `completing-read'.
-Selecting \"all\" or entering an empty string clears the filter."
+Selecting \"all\" or entering an empty string clears the action filter."
   (interactive
    (let* ((actions (llm-review--available-actions))
           (candidates (cons "all" actions))
@@ -883,22 +1034,47 @@ Selecting \"all\" or entering an empty string clears the filter."
         (progn
           (setq llm-review--action-filter nil)
           (llm-review--render-buffer)
-          (message "Filter cleared (showing all %d findings)." (length llm-review--findings)))
+          (message "Action filter cleared (showing %d findings)." (length (llm-review--visible-findings))))
       (setq llm-review--action-filter cleaned)
       (let* ((visible (llm-review--visible-findings))
              (first-visible (car visible)))
         (llm-review--render-buffer first-visible)
-        (message "Filtered by [%s]: %d of %d finding(s) visible."
+        (message "Filtered by action [%s]: %d of %d finding(s) visible."
+                 (upcase cleaned) (length visible) (length llm-review--findings))))))
+
+(defun llm-review-filter-by-risk (&optional risk)
+  "Filter visible findings by RISK (\"low\", \"medium\", \"high\").
+If called interactively, prompt for risk level using `completing-read'.
+Selecting \"all\" or entering an empty string clears the risk filter."
+  (interactive
+   (let* ((candidates '("all" "high" "medium" "low"))
+          (prompt (if llm-review--risk-filter
+                      (format "Filter by risk (current: %s, default all): "
+                              llm-review--risk-filter)
+                    "Filter by risk (default all): ")))
+     (list (completing-read prompt candidates nil t nil nil "all"))))
+  (let ((cleaned (and risk (downcase (string-trim risk)))))
+    (if (or (null cleaned) (string= cleaned "") (string-equal cleaned "all"))
+        (progn
+          (setq llm-review--risk-filter nil)
+          (llm-review--render-buffer)
+          (message "Risk filter cleared (showing %d findings)." (length (llm-review--visible-findings))))
+      (setq llm-review--risk-filter cleaned)
+      (let* ((visible (llm-review--visible-findings))
+             (first-visible (car visible)))
+        (llm-review--render-buffer first-visible)
+        (message "Filtered by risk [%s]: %d of %d finding(s) visible."
                  (upcase cleaned) (length visible) (length llm-review--findings))))))
 
 (defun llm-review-clear-filter ()
-  "Clear any active action filter, displaying all findings."
+  "Clear any active action or risk filters, displaying all findings."
   (interactive)
-  (if (null llm-review--action-filter)
+  (if (and (null llm-review--action-filter) (null llm-review--risk-filter))
       (message "No active filter.")
     (setq llm-review--action-filter nil)
+    (setq llm-review--risk-filter nil)
     (llm-review--render-buffer)
-    (message "Filter cleared (showing all %d findings)." (length llm-review--findings))))
+    (message "All filters cleared (showing all %d findings)." (length llm-review--findings))))
 
 ;;; Major Mode
 
@@ -912,6 +1088,7 @@ Selecting \"all\" or entering an empty string clears the filter."
     (define-key map (kbd "RET")   #'llm-review-visit)
     ;; Ergonomic navigation and utility bindings
     (define-key map (kbd "f")     #'llm-review-filter-by-action)
+    (define-key map (kbd "r")     #'llm-review-filter-by-risk)
     (define-key map (kbd "F")     #'llm-review-clear-filter)
     (define-key map (kbd "b")     #'llm-review-browse-reviews)
     (define-key map (kbd "n")     #'llm-review-next-finding)
@@ -959,6 +1136,9 @@ insertion type `t', then presents findings in `llm-review-mode'."
         (llm-review-mode)
         (setq llm-review--findings processed)
         (setq llm-review--action-filter nil)
+        (setq llm-review--risk-filter nil)
+        (setq llm-review--deleted-count 0)
+        (setq llm-review--dismissed-count 0)
         (setq llm-review--repo-root root)
         (setq llm-review--source-file expanded-json)
         (llm-review--render-buffer))

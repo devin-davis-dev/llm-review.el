@@ -255,6 +255,62 @@
               (should-not (oref sec hidden))))))
     (llm-review-test--teardown)))
 
+(ert-deftest llm-review-test-action-filtering ()
+  "Test filtering findings by action and clearing the filter."
+  (llm-review-test--setup)
+  (unwind-protect
+      (let* ((json-path (expand-file-name "findings.json" llm-review-test--test-dir))
+             (findings-json
+              (concat "[{"
+                      "\"file\": \"sample.py\","
+                      "\"start_line\": 2,"
+                      "\"end_line\": 4,"
+                      "\"title\": \"Unused function one\","
+                      "\"reason\": \"Delete me\","
+                      "\"action\": \"delete\""
+                      "},{"
+                      "\"file\": \"sample.py\","
+                      "\"start_line\": 6,"
+                      "\"end_line\": 7,"
+                      "\"title\": \"Simplify preserved function\","
+                      "\"reason\": \"Refactor me\","
+                      "\"action\": \"refactor\""
+                      "}]")))
+        (with-temp-file json-path (insert findings-json))
+        (let ((buf (llm-review-load-file json-path llm-review-test--test-dir)))
+          (with-current-buffer buf
+            ;; Initially, all 2 findings are visible
+            (should (equal (length (llm-review--visible-findings)) 2))
+            (should (string-match-p "Unused function one" (buffer-string)))
+            (should (string-match-p "Simplify preserved function" (buffer-string)))
+
+            ;; Filter by "delete"
+            (llm-review-filter-by-action "delete")
+            (should (equal (length (llm-review--visible-findings)) 1))
+            (should (string-equal llm-review--action-filter "delete"))
+            (should (string-match-p "Unused function one" (buffer-string)))
+            (should-not (string-match-p "Simplify preserved function" (buffer-string)))
+            (should (string-match-p "FILTER: DELETE" (buffer-string)))
+
+            ;; Clear filter with 'F' / llm-review-clear-filter
+            (llm-review-clear-filter)
+            (should (null llm-review--action-filter))
+            (should (equal (length (llm-review--visible-findings)) 2))
+            (should (string-match-p "Unused function one" (buffer-string)))
+            (should (string-match-p "Simplify preserved function" (buffer-string)))
+
+            ;; Filter by "refactor"
+            (llm-review-filter-by-action "refactor")
+            (should (equal (length (llm-review--visible-findings)) 1))
+            (should-not (string-match-p "Unused function one" (buffer-string)))
+            (should (string-match-p "Simplify preserved function" (buffer-string)))
+
+            ;; Clear filter with "all"
+            (llm-review-filter-by-action "all")
+            (should (null llm-review--action-filter))
+            (should (equal (length (llm-review--visible-findings)) 2)))))
+    (llm-review-test--teardown)))
+
 (provide 'llm-review-test)
 
 ;;; llm-review-test.el ends here

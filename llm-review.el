@@ -37,6 +37,7 @@
 (require 'json)
 (require 'magit-section)
 (require 'pulse nil t)
+(require 'subr-x)
 
 ;;; Customization
 
@@ -266,6 +267,9 @@ Prevents performance degradation on unusually large blocks."
 (defvar-local llm-review--findings nil
   "List of loaded finding alists in the current review buffer.")
 
+(defvar-local llm-review--action-filter nil
+  "Current action filter string (e.g. \"delete\"), or nil for all findings.")
+
 (defvar-local llm-review--repo-root nil
   "Repository root directory associated with the current review buffer.")
 
@@ -273,6 +277,27 @@ Prevents performance degradation on unusually large blocks."
   "Source JSON file path from which findings were ingested.")
 
 ;;; Utilities & Field Accessors
+
+(defun llm-review--available-actions ()
+  "Return unique list of lowercased actions present in `llm-review--findings'."
+  (let (actions)
+    (dolist (f llm-review--findings)
+      (let ((act (downcase (or (llm-review--field f 'action) "review"))))
+        (unless (member act actions)
+          (push act actions))))
+    (sort actions #'string-lessp)))
+
+(defun llm-review--visible-findings ()
+  "Return list of findings matching `llm-review--action-filter'."
+  (if (or (null llm-review--action-filter)
+          (string= llm-review--action-filter "")
+          (string-equal (downcase llm-review--action-filter) "all"))
+      llm-review--findings
+    (cl-remove-if-not
+     (lambda (f)
+       (string-equal (downcase (or (llm-review--field f 'action) "review"))
+                     (downcase llm-review--action-filter)))
+     llm-review--findings)))
 
 (defun llm-review--field (finding &rest keys)
   "Retrieve value for any of KEYS from FINDING.
@@ -314,17 +339,25 @@ FINDING can be an alist or plist.  KEYS are candidate symbols or strings."
      ((member act '("style" "lint" "convention")) 'llm-review-action-style)
      (t 'llm-review-action-default))))
 
+(defun llm-review--propertize (string face &rest extra-props)
+  "Return STRING propertized with FACE for both `face' and `font-lock-face'.
+EXTRA-PROPS are additional plist properties applied to STRING."
+  (if (or (null string) (null face))
+      (or string "")
+    (apply #'propertize string 'face face 'font-lock-face face extra-props)))
+
 (defun llm-review--format-reason (text)
   "Format reason TEXT, fontifying inline `code` fragments."
   (if (or (null text) (string= text ""))
       ""
     (with-temp-buffer
-      (insert (propertize text 'face 'llm-review-reason))
+      (insert (llm-review--propertize text 'llm-review-reason))
       (goto-char (point-min))
       (while (re-search-forward "`\\([^`\n]+\\)`" nil t)
         (let ((start (match-beginning 0))
               (end (match-end 0)))
-          (add-text-properties start end '(face llm-review-code-quote))))
+          (add-text-properties start end '(face llm-review-code-quote
+                                           font-lock-face llm-review-code-quote))))
       (buffer-string))))
 
 (defun llm-review--format-action-counts (findings)
@@ -338,15 +371,15 @@ FINDING can be an alist or plist.  KEYS are candidate symbols or strings."
        (lambda (act count)
          (let ((face (llm-review--action-face act))
                (label (format " [%d %s] " count (upcase act))))
-           (push (propertize label 'face face) parts)))
+           (push (llm-review--propertize label face) parts)))
        counts)
       (mapconcat #'identity (nreverse parts) " "))))
 
 (defun llm-review--format-key-hint (key desc)
   "Format KEY and DESC with badge styling."
-  (concat (propertize (format " %s " key) 'face 'llm-review-key)
+  (concat (llm-review--propertize (format " %s " key) 'llm-review-key)
           " "
-          (propertize desc 'face 'shadow)))
+          (llm-review--propertize desc 'shadow)))
 
 ;;; JSON Parsing
 
@@ -455,9 +488,9 @@ deletions occur in the source buffer.  Returns updated finding alist."
          (buf (and (markerp s-marker) (marker-buffer s-marker))))
     (cond
      ((not (and buf (buffer-live-p buf)))
-      (propertize "      [Source buffer not available]\n" 'face 'shadow))
+      (llm-review--propertize "      [Source buffer not available]\n" 'shadow))
      ((not (and (marker-position s-marker) (marker-position e-marker)))
-      (propertize "      [Invalid marker position]\n" 'face 'shadow))
+      (llm-review--propertize "      [Invalid marker position]\n" 'shadow))
      (t
       (with-current-buffer buf
         (save-restriction
@@ -465,13 +498,21 @@ deletions occur in the source buffer.  Returns updated finding alist."
           (let* ((beg (marker-position s-marker))
                  (end (marker-position e-marker)))
             (if (> beg end)
-                (propertize "      [Empty or reversed code range]\n" 'face 'shadow)
+                (llm-review--propertize "      [Empty or reversed code range]\n" 'shadow)
               ;; Ensure syntax highlighting is active
               (font-lock-ensure beg end)
               (let* ((start-line (line-number-at-pos beg))
                      (src-buf buf))
                 (with-temp-buffer
                   (insert-buffer-substring src-buf beg end)
+                  ;; Mirror syntax highlighting from source buffer onto font-lock-face
+                  (let ((pos (point-min)))
+                    (while (< pos (point-max))
+                      (let ((next (next-property-change pos nil (point-max)))
+                            (fc (get-text-property pos 'face)))
+                        (when fc
+                          (put-text-property pos next 'font-lock-face fc))
+                        (setq pos next))))
                   (goto-char (point-min))
                   (let ((cur-line start-line)
                         (lines-count 0)
@@ -482,25 +523,38 @@ deletions occur in the source buffer.  Returns updated finding alist."
                              (gutter-char (if is-delete "-" "|"))
                              (gutter-face (if is-delete 'llm-review-action-delete 'llm-review-gutter))
                              (prefix (if llm-review-show-line-numbers
-                                         (concat (propertize (format "      %4d " cur-line)
-                                                             'face 'llm-review-line-number)
-                                                 (propertize (format "%s " gutter-char)
-                                                             'face gutter-face))
+                                         (concat (llm-review--propertize (format "      %4d " cur-line)
+                                                                         'llm-review-line-number)
+                                                 (llm-review--propertize (format "%s " gutter-char)
+                                                                         gutter-face))
                                        (concat "      "
-                                               (propertize (format "%s " gutter-char)
-                                                           'face gutter-face))))
+                                               (llm-review--propertize (format "%s " gutter-char)
+                                                                       gutter-face))))
                              (line-full (concat prefix line "\n")))
                         (when (and is-delete llm-review-highlight-deletion-snippets)
                           (add-face-text-property 0 (length line-full)
-                                                  'llm-review-snippet-delete t line-full))
+                                                  'llm-review-snippet-delete t line-full)
+                          (let ((pos 0)
+                                (len (length line-full)))
+                            (while (< pos len)
+                              (let* ((next (next-property-change pos line-full len))
+                                     (cur-fl (get-text-property pos 'font-lock-face line-full)))
+                                (put-text-property pos next 'font-lock-face
+                                                   (if cur-fl
+                                                       (if (listp cur-fl)
+                                                           (append cur-fl '(llm-review-snippet-delete))
+                                                         (list cur-fl 'llm-review-snippet-delete))
+                                                     'llm-review-snippet-delete)
+                                                   line-full)
+                                (setq pos next)))))
                         (setq out-str (concat out-str line-full))
                         (setq cur-line (1+ cur-line))
                         (setq lines-count (1+ lines-count))
                         (forward-line 1)))
                     (when (not (eobp))
                       (setq out-str (concat out-str
-                                            (propertize "      [... remaining lines truncated ...]\n"
-                                                        'face 'llm-review-line-number))))
+                                            (llm-review--propertize "      [... remaining lines truncated ...]\n"
+                                                                    'llm-review-line-number))))
                     out-str)))))))))))
 
 ;;; Navigation & Selection Helpers
@@ -550,40 +604,60 @@ deletions occur in the source buffer.  Returns updated finding alist."
 (defun llm-review--render-buffer (&optional target-finding)
   "Render findings in the review buffer.
 If TARGET-FINDING is provided, move point to its section after rendering."
-  (let ((inhibit-read-only t)
-        (findings llm-review--findings)
-        (repo-root llm-review--repo-root)
-        (source-file llm-review--source-file))
+  (let* ((inhibit-read-only t)
+         (all-findings llm-review--findings)
+         (visible-findings (llm-review--visible-findings))
+         (repo-root llm-review--repo-root)
+         (source-file llm-review--source-file)
+         (filter llm-review--action-filter))
     (erase-buffer)
     ;; Root section wrapper enables collapsible subsections in magit-section
     (magit-insert-section (magit-section)
       ;; Buffer header
-      (insert (propertize "  LLM Code Review\n" 'face 'llm-review-header))
-      (insert (propertize (concat "  " (make-string 72 ?─) "\n") 'face 'llm-review-divider))
-      (insert "  " (propertize "Source:   " 'face 'llm-review-label)
-              (propertize (or source-file "in-memory") 'face 'llm-review-location) "\n")
-      (insert "  " (propertize "Root:     " 'face 'llm-review-label)
-              (propertize (or repo-root default-directory) 'face 'llm-review-location) "\n")
-      (insert "  " (propertize "Findings: " 'face 'llm-review-label)
-              (propertize (format "%d remaining" (length findings)) 'face 'bold))
-      (when findings
-        (insert "   " (llm-review--format-action-counts findings)))
+      (insert (llm-review--propertize "  LLM Code Review\n" 'llm-review-header))
+      (insert (llm-review--propertize (concat "  " (make-string 72 ?─) "\n") 'llm-review-divider))
+      (insert "  " (llm-review--propertize "Source:   " 'llm-review-label)
+              (llm-review--propertize (or source-file "in-memory") 'llm-review-location) "\n")
+      (insert "  " (llm-review--propertize "Root:     " 'llm-review-label)
+              (llm-review--propertize (or repo-root default-directory) 'llm-review-location) "\n")
+      (insert "  " (llm-review--propertize "Findings: " 'llm-review-label))
+      (if filter
+          (insert (llm-review--propertize (format "%d visible (of %d total)"
+                                                  (length visible-findings)
+                                                  (length all-findings))
+                                          'bold)
+                  "   "
+                  (llm-review--propertize (format " [FILTER: %s] " (upcase filter))
+                                          (llm-review--action-face filter))
+                  " "
+                  (llm-review--propertize "(press 'F' to clear)" 'shadow))
+        (insert (llm-review--propertize (format "%d remaining" (length all-findings)) 'bold))
+        (when all-findings
+          (insert "   " (llm-review--format-action-counts all-findings))))
       (insert "\n")
-      (insert "  " (propertize "Quickref: " 'face 'llm-review-label)
+      (insert "  " (llm-review--propertize "Quickref: " 'llm-review-label)
               (llm-review--format-key-hint "TAB" "preview") "  "
               (llm-review--format-key-hint "RET" "visit") "  "
               (llm-review--format-key-hint "d" "delete") "  "
               (llm-review--format-key-hint "x" "dismiss") "  "
+              (llm-review--format-key-hint "f/F" "filter") "  "
               (llm-review--format-key-hint "n/p" "nav") "  "
               (llm-review--format-key-hint "g" "refresh") "  "
               (llm-review--format-key-hint "q" "quit") "\n")
-      (insert (propertize (concat "  " (make-string 72 ?─) "\n\n") 'face 'llm-review-divider))
+      (insert (llm-review--propertize (concat "  " (make-string 72 ?─) "\n\n") 'llm-review-divider))
 
-      (if (null findings)
-          (insert (propertize "  ✓ All findings resolved! (0 remaining)\n\n"
-                              'face '(:inherit (success bold))))
-        ;; Insert each finding as a collapsible section
-        (dolist (finding findings)
+      (cond
+       ((null all-findings)
+        (insert (llm-review--propertize "  ✓ All findings resolved! (0 remaining)\n\n"
+                                        '(:inherit (success bold)))))
+       ((null visible-findings)
+        (insert (llm-review--propertize (format "  ✓ No findings matching filter [%s]! (%d other findings remaining, press 'F' to reset filter)\n\n"
+                                                (upcase (or filter "UNKNOWN"))
+                                                (length all-findings))
+                                        '(:inherit (warning bold)))))
+       (t
+        ;; Insert each visible finding as a collapsible section
+        (dolist (finding visible-findings)
           (let* ((title (or (llm-review--field finding 'title) "Untitled Finding"))
                  (action (or (llm-review--field finding 'action) "review"))
                  (reason (llm-review--field finding 'reason))
@@ -598,26 +672,26 @@ If TARGET-FINDING is provided, move point to its section after rendering."
             (magit-insert-section (llm-review-finding-section finding nil)
               ;; Heading: [ACTION] Title  rel-file:start-end
               (magit-insert-heading
-                (propertize action-str 'face act-face)
+                (llm-review--propertize action-str act-face)
                 " "
-                (propertize title 'face 'llm-review-title)
+                (llm-review--propertize title 'llm-review-title)
                 "  "
-                (propertize rel-file 'face 'llm-review-file)
-                (propertize ":" 'face 'shadow)
-                (propertize (format "%d-%d" start-ln end-ln) 'face 'llm-review-line-number-range))
+                (llm-review--propertize rel-file 'llm-review-file)
+                (llm-review--propertize ":" 'shadow)
+                (llm-review--propertize (format "%d-%d" start-ln end-ln) 'llm-review-line-number-range))
               ;; Metadata body
               (when reason
-                (insert "    " (propertize "Reason: " 'face 'llm-review-label)
+                (insert "    " (llm-review--propertize "Reason: " 'llm-review-label)
                         (llm-review--format-reason reason) "\n"))
-              (insert "    " (propertize "Action: " 'face 'llm-review-label)
-                      (propertize (downcase action) 'face act-face) "\n")
+              (insert "    " (llm-review--propertize "Action: " 'llm-review-label)
+                      (llm-review--propertize (downcase action) act-face) "\n")
               ;; Collapsible Code Snippet subsection
               (magit-insert-section (llm-review-snippet-section finding llm-review-collapse-snippets-by-default)
                 (magit-insert-heading
-                  (propertize (format "    Preview (lines %d-%d):" start-ln end-ln)
-                              'face 'llm-review-snippet-heading))
+                  (llm-review--propertize (format "    Preview (lines %d-%d):" start-ln end-ln)
+                                          'llm-review-snippet-heading))
                 (insert (llm-review--format-snippet finding)))
-              (insert "\n"))))))
+              (insert "\n")))))))
     ;; Restore or move point
     (if (and target-finding (boundp 'magit-root-section) magit-root-section)
         (let ((sec (cl-find target-finding (oref magit-root-section children)
@@ -692,26 +766,37 @@ Clean up markers and refresh the UI."
           (with-current-buffer buf
             (save-restriction
               (widen)
-              ;; Determine full deletion range, cleanly removing trailing newline
+              ;; Determine full deletion range, cleanly removing trailing newline (LF or CRLF)
               (let* ((del-beg beg)
-                     (del-end (if (and (< end (point-max))
-                                       (= (char-after end) ?\n))
-                                  (1+ end)
-                                end)))
+                     (del-end (cond
+                               ((and (< (1+ end) (point-max))
+                                     (= (char-after end) ?\r)
+                                     (= (char-after (1+ end)) ?\n))
+                                (+ end 2))
+                               ((and (< end (point-max))
+                                     (= (char-after end) ?\n))
+                                (1+ end))
+                               (t end))))
                 ;; If at very end of buffer without trailing newline, remove preceding newline
-                (when (and (= del-end (point-max))
-                           (> del-beg (point-min))
-                           (= (char-before del-beg) ?\n))
-                  (setq del-beg (1- del-beg)))
+                (when (= del-end (point-max))
+                  (cond
+                   ((and (> del-beg (+ (point-min) 1))
+                         (= (char-before (1- del-beg)) ?\r)
+                         (= (char-before del-beg) ?\n))
+                    (setq del-beg (- del-beg 2)))
+                   ((and (> del-beg (point-min))
+                         (= (char-before del-beg) ?\n))
+                    (setq del-beg (1- del-beg)))))
                 (delete-region del-beg del-end))))
           ;; Clean up markers
           (llm-review--cleanup-markers finding)
           ;; Compute next target finding before removal
-          (let* ((idx (cl-position finding llm-review--findings))
-                 (new-findings (delq finding llm-review--findings))
-                 (next-target (and new-findings
-                                   (nth (min idx (1- (length new-findings))) new-findings))))
-            (setq llm-review--findings new-findings)
+          (let* ((cur-visible (llm-review--visible-findings))
+                 (v-idx (cl-position finding cur-visible))
+                 (new-visible (delq finding (copy-sequence cur-visible)))
+                 (next-target (and new-visible
+                                   (nth (min (or v-idx 0) (1- (length new-visible))) new-visible))))
+            (setq llm-review--findings (delq finding llm-review--findings))
             (llm-review--render-buffer next-target)
             (message "Deleted code block: %s" title)))))))
 
@@ -723,11 +808,12 @@ Clean up markers and refresh the UI."
       (user-error "No LLM review finding at point"))
     (let ((title (or (llm-review--field finding 'title) "finding")))
       (llm-review--cleanup-markers finding)
-      (let* ((idx (cl-position finding llm-review--findings))
-             (new-findings (delq finding llm-review--findings))
-             (next-target (and new-findings
-                               (nth (min idx (1- (length new-findings))) new-findings))))
-        (setq llm-review--findings new-findings)
+      (let* ((cur-visible (llm-review--visible-findings))
+             (v-idx (cl-position finding cur-visible))
+             (new-visible (delq finding (copy-sequence cur-visible)))
+             (next-target (and new-visible
+                               (nth (min (or v-idx 0) (1- (length new-visible))) new-visible))))
+        (setq llm-review--findings (delq finding llm-review--findings))
         (llm-review--render-buffer next-target)
         (message "Dismissed: %s" title)))))
 
@@ -737,8 +823,45 @@ Clean up markers and refresh the UI."
   (when (or (null llm-review--findings)
             (yes-or-no-p (format "Clear all %d findings? " (length llm-review--findings))))
     (llm-review--cleanup-all-markers)
+    (setq llm-review--action-filter nil)
     (llm-review--render-buffer)
     (message "All LLM review findings cleared.")))
+
+(defun llm-review-filter-by-action (&optional action)
+  "Filter visible findings by ACTION.
+If called interactively, prompt for an action using `completing-read'.
+Selecting \"all\" or entering an empty string clears the filter."
+  (interactive
+   (let* ((actions (llm-review--available-actions))
+          (candidates (cons "all" actions))
+          (prompt (if llm-review--action-filter
+                      (format "Filter by action (current: %s, default all): "
+                              llm-review--action-filter)
+                    "Filter by action (default all): ")))
+     (unless actions
+       (user-error "No findings to filter"))
+     (list (completing-read prompt candidates nil t nil nil "all"))))
+  (let ((cleaned (and action (downcase (string-trim action)))))
+    (if (or (null cleaned) (string= cleaned "") (string-equal cleaned "all"))
+        (progn
+          (setq llm-review--action-filter nil)
+          (llm-review--render-buffer)
+          (message "Filter cleared (showing all %d findings)." (length llm-review--findings)))
+      (setq llm-review--action-filter cleaned)
+      (let* ((visible (llm-review--visible-findings))
+             (first-visible (car visible)))
+        (llm-review--render-buffer first-visible)
+        (message "Filtered by [%s]: %d of %d finding(s) visible."
+                 (upcase cleaned) (length visible) (length llm-review--findings))))))
+
+(defun llm-review-clear-filter ()
+  "Clear any active action filter, displaying all findings."
+  (interactive)
+  (if (null llm-review--action-filter)
+      (message "No active filter.")
+    (setq llm-review--action-filter nil)
+    (llm-review--render-buffer)
+    (message "Filter cleared (showing all %d findings)." (length llm-review--findings))))
 
 ;;; Major Mode
 
@@ -751,6 +874,8 @@ Clean up markers and refresh the UI."
     (define-key map (kbd "x")     #'llm-review-dismiss)
     (define-key map (kbd "RET")   #'llm-review-visit)
     ;; Ergonomic navigation and utility bindings
+    (define-key map (kbd "f")     #'llm-review-filter-by-action)
+    (define-key map (kbd "F")     #'llm-review-clear-filter)
     (define-key map (kbd "n")     #'llm-review-next-finding)
     (define-key map (kbd "p")     #'llm-review-previous-finding)
     (define-key map (kbd "g")     #'llm-review-refresh)
@@ -767,6 +892,7 @@ Keybindings:
   :group 'llm-review
   (setq-local buffer-read-only t)
   (setq-local truncate-lines t)
+  (setq-local font-lock-defaults '(nil t))
   (add-hook 'kill-buffer-hook #'llm-review--cleanup-all-markers nil t))
 
 ;;; Ingestion Entry Point
@@ -794,6 +920,7 @@ insertion type `t', then presents findings in `llm-review-mode'."
         (llm-review--cleanup-all-markers)
         (llm-review-mode)
         (setq llm-review--findings processed)
+        (setq llm-review--action-filter nil)
         (setq llm-review--repo-root root)
         (setq llm-review--source-file expanded-json)
         (llm-review--render-buffer))

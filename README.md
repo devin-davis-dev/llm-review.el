@@ -102,6 +102,8 @@ Inside `llm-review-mode` (`*llm-review*`):
 | `d` | `llm-review-delete` | Delete target code block in source buffer & refresh UI |
 | `x` | `llm-review-dismiss` | Dismiss finding without touching source file |
 | `RET` | `llm-review-visit` | Jump to source location (pulsing region) |
+| `f` | `llm-review-filter-by-action` | Filter findings by action (e.g. `delete`, `refactor`) |
+| `F` | `llm-review-clear-filter` | Clear active action filter and show all findings |
 | `n` | `llm-review-next-finding` | Move to next finding |
 | `p` | `llm-review-previous-finding` | Move to previous finding |
 | `g` | `llm-review-refresh` | Re-render UI with dynamic line numbers |

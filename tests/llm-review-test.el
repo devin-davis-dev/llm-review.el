@@ -311,6 +311,32 @@
             (should (equal (length (llm-review--visible-findings)) 2)))))
     (llm-review-test--teardown)))
 
+(ert-deftest llm-review-test-delete-crlf-line-endings ()
+  "Test that deletion works cleanly on DOS/Windows CRLF line endings."
+  (llm-review-test--setup)
+  (unwind-protect
+      (let* ((crlf-file (expand-file-name "crlf_sample.py" llm-review-test--test-dir))
+             (json-path (expand-file-name "findings.json" llm-review-test--test-dir)))
+        ;; Write file with explicit CRLF line endings
+        (with-temp-file crlf-file
+          (setq buffer-file-coding-system 'raw-text)
+          (insert "line1\r\ndef to_delete():\r\n    pass\r\nline4\r\n"))
+        (with-temp-file json-path
+          (insert "[{\"file\": \"crlf_sample.py\", \"start_line\": 2, \"end_line\": 3, \"title\": \"Delete CRLF\", \"action\": \"delete\"}]"))
+        (let ((buf (llm-review-load-file json-path llm-review-test--test-dir)))
+          (with-current-buffer buf
+            (goto-char (point-min))
+            (re-search-forward "Delete CRLF")
+            (let ((llm-review-confirm-delete nil))
+              (call-interactively #'llm-review-delete)))
+          ;; Verify source buffer has clean line boundaries with the block deleted
+          (let ((src-buf (find-file-noselect crlf-file)))
+            (with-current-buffer src-buf
+              (should-not (string-match-p "to_delete" (buffer-string)))
+              (should (string-match-p "line1" (buffer-string)))
+              (should (string-match-p "line4" (buffer-string)))))))
+    (llm-review-test--teardown)))
+
 (provide 'llm-review-test)
 
 ;;; llm-review-test.el ends here
